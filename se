@@ -2,6 +2,7 @@
 
 DEFAULT_EDITOR=vi
 THE_REPO=~/.se
+FS=$(hostname -s)
 
 say() {
 	echo "$@" >&2
@@ -29,15 +30,19 @@ env_bin() {
 
 run_if_env_bin() {
 	local cmd="$1"
+	local fn sudo
 	shift
-	env_bin "$cmd" && "$cmd" "$@" || false
+	for fn; do [ -w "$fn" ] || sudo=sudo; done
+	env_bin "$cmd" && $sudo "$cmd" "$@" || false
 }
 
 edit() {
+	local fn sudo
+	for fn; do [ -w "$fn" ] || sudo=sudo; done
 	run_if_env_bin "$VISUAL" "$@" ||
 	run_if_env_bin "$EDITOR" "$@" ||
 	run_if_env_bin "$GIT_EDITOR" "$@" ||
-	"$DEFAULT_EDITOR" "$@"
+	$sudo "$DEFAULT_EDITOR" "$@"
 }
 
 ################################################################################
@@ -46,14 +51,14 @@ init_repo() {
 	if [ -d "$THE_REPO/.git/." ]; then
 		:
 	else
-		mkdir -pv "$THE_REPO/fs"
+		mkdir -pv "$THE_REPO/$FS"
 		(cd "$THE_REPO" && touch README && git init && git add README && git commit -m genesis)
 	fi
 }
 
 repo_file() {
 	local f="$1"
-	echo -n "$THE_REPO/fs/${f:1}"
+	echo -n "$THE_REPO/$FS/${f:1}"
 }
 
 file_is_tracked() {
@@ -65,12 +70,12 @@ track_file() {
 	local r="$(repo_file "$f")"
 	local d="$(dirname "$f")"; d="${d:1}"
 
-	mkdir -pv "$THE_REPO/fs/$d"
+	mkdir -pv "$THE_REPO/$FS/$d"
 	cp -v "$f" "$r" || error $? "Cannot copy '$f' to '$r'."
 
-	local a="$(cd $THE_REPO && realpath --relative-to="fs" "$r")"
-	(cd "$THE_REPO/fs" && git add "$a") || error $? "git add '$a' error"
-	(cd "$THE_REPO/fs" && git commit -am "add $a") || error $? "git commit '$a' error"
+	local a="$(cd $THE_REPO && realpath --relative-to="$FS" "$r")"
+	(cd "$THE_REPO/$FS" && git add "$a") || error $? "git add '$a' error"
+	(cd "$THE_REPO/$FS" && git commit -am "add $a") || error $? "git commit '$a' error"
 }
 
 file_is_changed() {
@@ -83,13 +88,13 @@ update_file() {
 	local f="$1"
 	local r="$(repo_file "$f")"
 	cp -v "$f" "$r" || error $? "Cannot copy '$f' to '$r'."
-	local a="$(cd $THE_REPO && realpath --relative-to="fs" "$r")"
-	(cd "$THE_REPO/fs" && git add "$a") || error $? "git add '$a' error"
+	local a="$(cd $THE_REPO && realpath --relative-to="$FS" "$r")"
+	(cd "$THE_REPO/$FS" && git add "$a") || error $? "git add '$a' error"
 }
 
 commit_changes() {
 	local files="$*"
-	(cd "$THE_REPO/fs" && git commit -am "changed $files") || error $? "git commit '$files' error"
+	(cd "$THE_REPO/$FS" && git commit -am "changed $files") || error $? "git commit '$files' error"
 }
 
 ################################################################################
