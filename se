@@ -1,0 +1,121 @@
+#!/bin/bash
+
+DEFAULT_EDITOR=vi
+THE_REPO=~/.se
+
+say() {
+	echo "$@" >&2
+}
+
+error() {
+	local -i rc=$1
+	shift
+	say "$*"
+	exit $rc
+}
+
+################################################################################
+
+has_executable() {
+	local cmd="$1"
+	local bin="$(type -p "$cmd")"
+	if [ -e "$bin" ] && [ -x "$bin" ]; then true; else false; fi
+}
+
+env_bin() {
+	local value="$1"
+	if [ -n "$value" ]; then has_executable "$value"; else false; fi
+}
+
+run_if_env_bin() {
+	local cmd="$1"
+	shift
+	env_bin "$cmd" && "$cmd" "$@" || false
+}
+
+edit() {
+	run_if_env_bin "$VISUAL" "$@" ||
+	run_if_env_bin "$EDITOR" "$@" ||
+	run_if_env_bin "$GIT_EDITOR" "$@" ||
+	"$DEFAULT_EDITOR" "$@"
+}
+
+################################################################################
+
+init_repo() {
+	if [ -d "$THE_REPO/.git/." ]; then
+		:
+	else
+		mkdir -pv "$THE_REPO/fs"
+		(cd "$THE_REPO" && touch README && git init && git add README && git commit -m genesis)
+	fi
+}
+
+repo_file() {
+	local f="$1"
+	echo -n "$THE_REPO/fs/${f:1}"
+}
+
+file_is_tracked() {
+	test -f "$(repo_file "$1")"
+}
+
+track_file() {
+	local f="$1"
+	local r="$(repo_file "$f")"
+	local d="$(dirname "$f")"; d="${d:1}"
+
+	mkdir -pv "$THE_REPO/fs/$d"
+	cp -v "$f" "$r" || error $? "Cannot copy '$f' to '$r'."
+
+	local a="$(cd $THE_REPO && realpath --relative-to="fs" "$r")"
+	(cd "$THE_REPO/fs" && git add "$a") || error $? "git add '$a' error"
+	(cd "$THE_REPO/fs" && git commit -am "add $a") || error $? "git commit '$a' error"
+}
+
+file_is_changed() {
+	local f="$1"
+	local r="$(repo_file "$f")"
+	if cmp -s "$f" "$r"; then say "intact"; false; else say "changed"; true; fi
+}
+
+update_file() {
+	local f="$1"
+	local r="$(repo_file "$f")"
+	cp -v "$f" "$r" || error $? "Cannot copy '$f' to '$r'."
+	local a="$(cd $THE_REPO && realpath --relative-to="fs" "$r")"
+	(cd "$THE_REPO/fs" && git add "$a") || error $? "git add '$a' error"
+}
+
+commit_changes() {
+	local files="$*"
+	(cd "$THE_REPO/fs" && git commit -am "changed $files") || error $? "git commit '$files' error"
+}
+
+################################################################################
+
+init_repo
+
+declare -a files=( "$@" )
+
+(( ${#files[@]} == 0 )) && { cd $THE_REPO && git log --oneline -n 40; exit; }
+
+for ((i=0; i<${#files[@]}; i++)); do
+	f="$(realpath -e "${files[$i]}")"
+	files[$i]="$f"
+	file_is_tracked "$f" || track_file "$f"
+	unset f
+done
+
+edit "${files[@]}"
+typeset -i changed=0
+declare -a updated=()
+
+for ((i=0; i<${#files[@]}; i++)); do
+	f="${files[$i]}"
+	file_is_changed "$f" && { updated[$changed]="$f"; let changed+=1; update_file "$f"; }
+	unset f
+done
+(( changed > 0 )) && commit_changes "${updated[@]}"
+
+# EOF #
