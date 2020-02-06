@@ -51,14 +51,32 @@ init_repo() {
 	if [ -d "$THE_REPO/.git/." ]; then
 		:
 	else
-		mkdir -pv "$THE_REPO/$FS"
-		(cd "$THE_REPO" && touch README && git init && git add README && git commit -m genesis)
+		mkdir -pv "$THE_REPO/"
+		(cd "$THE_REPO" &&
+			touch README &&
+			git init &&
+			git add README &&
+			git commit -m genesis &&
+			git checkout -b $FS &&
+			mkdir -pv "$FS/" &&
+			touch "$FS/.init" &&
+			git add "$FS/.init" &&
+			git commit -m "genesis of $FS" &&
+		:)
 	fi
 }
 
 repo_file() {
 	local f="$1"
 	echo -n "$THE_REPO/$FS/${f:1}"
+}
+
+repo_is_remote() {
+	grep -sq '\[remote ' "$THE_REPO/.git/config"
+}
+
+update_remote() {
+	repo_is_remote && git push origin "$FS"
 }
 
 file_is_tracked() {
@@ -74,8 +92,10 @@ track_file() {
 	cp -v "$f" "$r" || error $? "Cannot copy '$f' to '$r'."
 
 	local a="$(cd $THE_REPO && realpath --relative-to="$FS" "$r")"
+	(cd "$THE_REPO/$FS" && git checkout "$FS") || error $? "git checkout '$FS' error"
 	(cd "$THE_REPO/$FS" && git add "$a") || error $? "git add '$a' error"
 	(cd "$THE_REPO/$FS" && git commit -am "add $a") || error $? "git commit '$a' error"
+	update_remote
 }
 
 file_is_changed() {
@@ -121,6 +141,8 @@ for ((i=0; i<${#files[@]}; i++)); do
 	file_is_changed "$f" && { updated[$changed]="$f"; let changed+=1; update_file "$f"; }
 	unset f
 done
-(( changed > 0 )) && commit_changes "${updated[@]}"
+if (( changed > 0 )); then
+	commit_changes "${updated[@]}" && update_remote
+fi
 
 # EOF #
