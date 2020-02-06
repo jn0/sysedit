@@ -1,5 +1,5 @@
 SOURCES := sysedit.sh
-INSTALL := install
+INSTALL := install -v
 TARGET := /usr/local/bin
 SHELL := /bin/bash
 
