@@ -1,0 +1,11 @@
+SOURCES := sysedit.sh
+INSTALL := install
+TARGET := /usr/local/bin
+SHELL := /bin/bash
+
+all:
+	:
+
+install: $(SOURCES)
+	@declare -A map=( [sysedit.sh]=se ); \
+	for s in $^; do $(INSTALL) $$s $(TARGET)/$${map[$$s]}; done
