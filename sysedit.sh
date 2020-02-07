@@ -90,11 +90,10 @@ init_repo() {
 			touch README &&
 			git init &&
 			git add README &&
+			mkdir -pv "$FS/" && touch "$FS/.init" && git add "$FS/.init" &&
 			git commit -m genesis &&
 			git checkout -b $FS &&
-			mkdir -pv "$FS/" &&
-			touch "$FS/.init" &&
-			git add "$FS/.init" &&
+			mkdir -pv "$FS/" && date >> "$FS/.init" && git add "$FS/.init" &&
 			git commit -m "genesis of $FS" &&
 		:)
 	fi
@@ -114,7 +113,7 @@ repo_is_remote() {
 }
 
 update_remote() {
-	repo_is_remote && git push
+	repo_is_remote && git push # origin "$FS"
 }
 
 file_is_tracked() {
@@ -190,12 +189,17 @@ set_remote() {
 	*)		error 1 "Wrong format '$arg'";;
 	esac
 	pushd "$THE_REPO" || error $? "Cannot chdir($THE_REPO)."
+
 	git remote add origin "$arg"
-	git checkout master
-	git push origin master
+
 	git checkout "$FS"
+	git pull origin "$FS"
+	git branch --set-upstream-to=origin/"$FS" "$FS"
+	git pull -r
+	# git push --set-upstream origin "$FS"
 	git push origin "$FS"
-	git push --set-upstream origin "$FS"
+	git push # origin "$FS"
+
 	popd
 }
 
@@ -203,6 +207,7 @@ set_remote() {
 
 do_help() {
 cat <<-EOT
+	$(basename $exe) --list | --ls
 	$(basename $exe) --remote=<GIT-URL>
 	$(basename $exe) <filespec> ...
 
@@ -211,6 +216,11 @@ cat <<-EOT
 	<filename> ::= mere local file name
 EOT
 	exit 0
+}
+
+do_list() {
+	pushd "$THE_REPO" && git status && git log --oneline -n10 && ls -ltraF && popd
+	exit $?
 }
 
 ################################################################################
@@ -232,6 +242,7 @@ for ((i=0; i<${#args[@]}; i++)); do
 			let k+=1
 			case "$a" in
 			--help|-h)	do_help;;
+			--list|--ls)	do_list;;
 			--create)	create=yes;;
 			--remove|--rm)	remove=yes;;
 			--remote=*)	set_remote "$a";;
