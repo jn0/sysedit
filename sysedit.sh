@@ -4,6 +4,9 @@ DEFAULT_EDITOR=vi
 THE_REPO=~/.se
 FS=$(hostname -s)
 
+create=no
+remove=no
+
 say() {
 	echo "$@" >&2
 }
@@ -45,6 +48,36 @@ edit() {
 	$sudo "$DEFAULT_EDITOR" "$@"
 }
 
+create_file() {
+	local fn="$1"
+	local dn=$(dirname "$fn")
+	local sudo=''
+	[ -d "$dn/." ] || {
+		mkdir -pv "$dn" || {
+			sudo=sudo; sudo mkdir -pv "$dn" ||
+				error $? "Cannot create '$dn/'"
+		}
+	}
+	[ -z "$sudo" -a ! -w "$dn/." ] && sudo=sudo
+	$sudo touch "$fn"
+}
+
+empty_dir() {
+	local dn="$1"
+	pushd "$dn" || error $? "Cannot pushd '$dn'."
+	local files="$(echo -n *)"
+	popd
+	[ "$files" = '*' ] && true || false
+}
+
+try_remove() {
+	local f="$1"
+	local d="$(dirname "$f")"
+	[ -w "$d/." ] || return 1
+	rm -f "$f" # >/dev/null 2>&1
+	return $?
+}
+
 ################################################################################
 
 init_repo() {
@@ -66,9 +99,13 @@ init_repo() {
 	fi
 }
 
-repo_file() {
+repo_local() {
 	local f="$1"
-	echo -n "$THE_REPO/$FS/${f:1}"
+	echo -n "$FS/${f:1}"
+}
+
+repo_file() {
+	echo -n "$THE_REPO/$(repo_local "$1")"
 }
 
 repo_is_remote() {
@@ -98,6 +135,33 @@ track_file() {
 	update_remote
 }
 
+clear_dirs() {
+	local dn="$1" stop="$THE_REPO/$FS" xn=''
+	[ "${dn:0:${#stop}}" = "$stop" ] || error 1 "Cannot clear '$dn' (not in '$stop')."
+	while [ -n "$dn" ] && [ "$dn" != "$stop" ]; do
+		if empty_dir "$dn"; then
+			rmdir "$dn"
+			dn="$(dirname "$dn")"
+		else
+			break
+		fi
+	done
+}
+
+untrack_file() {
+	local f="$1"
+	local l="$(repo_local "$f")"
+	local d="$(dirname "$f")"; d="${d:1}"
+
+	test -d "$THE_REPO/$FS/$d/." || return
+	(cd "$THE_REPO" && { git rm "$l" || error $? "Cannot git rm '$l'."; })
+	clear_dirs "$d"
+
+	(cd "$THE_REPO/$FS" && git commit -am "remove $l") ||
+		error $? "git commit 'remove $l' error"
+	update_remote
+}
+
 file_is_changed() {
 	local f="$1"
 	local r="$(repo_file "$f")"
@@ -121,16 +185,48 @@ commit_changes() {
 
 init_repo
 
-declare -a files=( "$@" )
+declare -a args=( "$@" )
+declare -a files=()
+declare -a flags=()
+
+declare -i j=0
+declare -i k=0
+for ((i=0; i<${#args[@]}; i++)); do
+	a="${args[$i]}"
+	f="$(realpath -qe -- "$a")"
+	if [ -z "$f" ]; then # no file!
+		if [ "${a:0:1}" = '-' ]; then
+			flags[$k]="$a"
+			let k+=1
+			case "$a" in
+			--create)	create=yes;;
+			--remove|--rm)	remove=yes;;
+			*)		error 1 "Unknow flag '$a'.";;
+			esac
+			continue
+		fi
+		[ "$create" != 'yes' ] && error 1 "There is no file '$a'."
+		create_file "$(realpath -qm -- "$a")"
+		f="$(realpath -qe -- "$a")"
+		[ -z "$f" ] && error 1 "Cannot create '$f' for '$a'."
+	fi
+	if [ "$remove" = 'yes' ]; then
+		try_remove "$f" || { sudo rm -iv "$f" || error $? "Cannot remove '$f'."; }
+		file_is_tracked "$f" && untrack_file "$f"
+		continue
+	fi
+	files[$j]="$f"
+	let j+=1
+	unset -v a f d
+done
+unset -v i j k
 
 (( ${#files[@]} == 0 )) && { cd $THE_REPO && git log --oneline -n 40; exit; }
 
-for ((i=0; i<${#files[@]}; i++)); do
-	f="$(realpath -e "${files[$i]}")"
-	files[$i]="$f"
+for f in "${files[@]}"; do
 	file_is_tracked "$f" || track_file "$f"
-	unset f
 done
+unset f
 
 edit "${files[@]}"
 typeset -i changed=0
