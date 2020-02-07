@@ -181,6 +181,22 @@ commit_changes() {
 	(cd "$THE_REPO/$FS" && git commit -am "changed $files") || error $? "git commit '$files' error"
 }
 
+set_remote() {
+	local arg="$1" # --remote=<URL>
+	case "$arg" in
+	--remote=*)	arg="${arg:9}";;
+	*)		error 1 "Wrong format '$arg'";;
+	esac
+	pushd "$THE_REPO" || error $? "Cannot chdir($THE_REPO)."
+	git remote add origin "$arg"
+	git checkout master
+	git push origin master
+	git checkout "$FS"
+	git push origin "$FS"
+	git push --set-upstream origin "$FS"
+	popd
+}
+
 ################################################################################
 
 init_repo
@@ -201,6 +217,7 @@ for ((i=0; i<${#args[@]}; i++)); do
 			case "$a" in
 			--create)	create=yes;;
 			--remove|--rm)	remove=yes;;
+			--remote=*)	set_remote "$a";;
 			*)		error 1 "Unknow flag '$a'.";;
 			esac
 			continue
