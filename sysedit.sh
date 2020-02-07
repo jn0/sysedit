@@ -64,6 +64,7 @@ create_file() {
 
 empty_dir() {
 	local dn="$1"
+	[ -d "$dn/." ] || return 0
 	pushd "$dn" || error $? "Cannot pushd '$dn'."
 	local files="$(echo -n *)"
 	popd
@@ -113,7 +114,7 @@ repo_is_remote() {
 }
 
 update_remote() {
-	repo_is_remote && git push origin "$FS"
+	repo_is_remote && git push
 }
 
 file_is_tracked() {
@@ -140,7 +141,8 @@ clear_dirs() {
 	[ "${dn:0:${#stop}}" = "$stop" ] || error 1 "Cannot clear '$dn' (not in '$stop')."
 	while [ -n "$dn" ] && [ "$dn" != "$stop" ]; do
 		if empty_dir "$dn"; then
-			rmdir "$dn"
+			[ -d "$dn/." ] && rmdir "$dn"
+			[ -e "$dn" ] && error 1 "Cannot remove '$dn'."
 			dn="$(dirname "$dn")"
 		else
 			break
@@ -155,7 +157,7 @@ untrack_file() {
 
 	test -d "$THE_REPO/$FS/$d/." || return
 	(cd "$THE_REPO" && { git rm "$l" || error $? "Cannot git rm '$l'."; })
-	clear_dirs "$d"
+	clear_dirs "$(dirname `repo_file "$f"`)"
 
 	(cd "$THE_REPO/$FS" && git commit -am "remove $l") ||
 		error $? "git commit 'remove $l' error"
@@ -199,6 +201,20 @@ set_remote() {
 
 ################################################################################
 
+do_help() {
+cat <<-EOT
+	$(basename $exe) --remote=<GIT-URL>
+	$(basename $exe) <filespec> ...
+
+	<filespec> ::= [ <option> ] <filename>
+	<option> ::= '--create' | '--remove' | '--rm'
+	<filename> ::= mere local file name
+EOT
+	exit 0
+}
+
+################################################################################
+
 init_repo
 
 declare -a args=( "$@" )
@@ -215,6 +231,7 @@ for ((i=0; i<${#args[@]}; i++)); do
 			flags[$k]="$a"
 			let k+=1
 			case "$a" in
+			--help|-h)	do_help;;
 			--create)	create=yes;;
 			--remove|--rm)	remove=yes;;
 			--remote=*)	set_remote "$a";;
@@ -222,7 +239,8 @@ for ((i=0; i<${#args[@]}; i++)); do
 			esac
 			continue
 		fi
-		[ "$create" != 'yes' ] && error 1 "There is no file '$a'."
+		[ "$create" != 'yes' ] &&
+			error 1 "There is no file '$a'. Use '--create $a' if needed."
 		create_file "$(realpath -qm -- "$a")"
 		f="$(realpath -qe -- "$a")"
 		[ -z "$f" ] && error 1 "Cannot create '$f' for '$a'."
