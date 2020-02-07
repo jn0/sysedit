@@ -1,6 +1,9 @@
 #!/bin/bash
 
+exe="$0"
+
 DEFAULT_EDITOR=vi
+CONFIG=~/.sysedit.conf
 THE_REPO=~/.se
 FS=$(hostname -s)
 
@@ -17,6 +20,17 @@ error() {
 	say "$*"
 	exit $rc
 }
+
+################################################################################
+
+if [ -f "$CONFIG" ] && [ -r "$CONFIG" ]; then
+	repo=$(grep '^[ \t]*repo=' "$CONFIG") || error $? "No 'repo=' in '$CONFIG'."
+	repo=$(eval echo -n $(echo -n $repo | cut -d= -f2-))
+	[ -d "$repo/." ] || error $? "No directory '$repo'."
+	[ -f "$repo/.git/config" ] || error $? "Not a GIT repo '$repo'."
+	THE_REPO="$repo"
+	unset repo
+fi
 
 ################################################################################
 
@@ -93,7 +107,7 @@ init_repo() {
 			mkdir -pv "$FS/" && touch "$FS/.init" && git add "$FS/.init" &&
 			git commit -m genesis &&
 			git checkout -b $FS &&
-			mkdir -pv "$FS/" && date >> "$FS/.init" && git add "$FS/.init" &&
+			mkdir -pv "$FS/" && LANG=C date > "$FS/.init" && git add "$FS/.init" &&
 			git commit -m "genesis of $FS" &&
 		:)
 	fi
@@ -178,8 +192,12 @@ update_file() {
 }
 
 commit_changes() {
-	local files="$*"
-	(cd "$THE_REPO/$FS" && git commit -am "changed $files") || error $? "git commit '$files' error"
+	local -a files=( "$@" )
+	for ((i=0; i<${#files[@]}; i++)); do
+		files[$i]=$(repo_local ${files[$i]})
+	done
+	(cd "$THE_REPO/$FS" && git commit -am "changed ${files[*]}") ||
+		error $? "git commit '${files[*]}' error"
 }
 
 set_remote() {
@@ -189,17 +207,24 @@ set_remote() {
 	*)		error 1 "Wrong format '$arg'";;
 	esac
 	pushd "$THE_REPO" || error $? "Cannot chdir($THE_REPO)."
-
+set -x
 	git remote add origin "$arg"
-
 	git checkout "$FS"
-	git pull origin "$FS"
+	git fetch
 	git branch --set-upstream-to=origin/"$FS" "$FS"
-	git pull -r
-	# git push --set-upstream origin "$FS"
-	git push origin "$FS"
-	git push # origin "$FS"
+	git pull -r origin "$FS"
 
+	while [ -n "$(git status --porcelain)" ]; do
+		git rebase --skip
+	done
+
+	LANG=C date > "$FS/.init"
+	git commit -m "update '$FS/.init'" "$FS/.init"
+
+	# git push --set-upstream origin "$FS"
+	# git push origin "$FS"
+	git push # origin "$FS"
+set +x
 	popd
 }
 
@@ -207,13 +232,19 @@ set_remote() {
 
 do_help() {
 cat <<-EOT
-	$(basename $exe) --list | --ls
-	$(basename $exe) --remote=<GIT-URL>
-	$(basename $exe) <filespec> ...
+	$(basename $exe) --list | --ls	# show some info about backend
+	$(basename $exe) --remote=<GIT-URL>	# setup backend to track upstream
+	$(basename $exe) <filespec> ...	# work with files
 
-	<filespec> ::= [ <option> ] <filename>
+	<filespec> ::= [ <option> ] <filename> ...
 	<option> ::= '--create' | '--remove' | '--rm'
 	<filename> ::= mere local file name
+
+	ALL filenames after --create will be created.
+	ALL filenames after --remove will be removed.
+
+	It's quite possible to enable BOTH options to
+	do some tricks...
 EOT
 	exit 0
 }
