@@ -59,19 +59,19 @@ se_init() {
 	local host=$(hostname -f)
 	mkdir -p "$_se__data_d/$host/."
 	pushd "$_se__data_d/." >/dev/null
-	git init
-	date '+%F %T %z' > "$host/.init.stamp"
-	echo '.*.swp' > .gitignore
-	echo '# SysEdit Git Backend Directory #' > README.md
-	echo "## Created at '$host' on $(< $host/.init.stamp) ##" >> README.md
-	git add .gitignore README.md "$host/.init.stamp"
-	git commit -am "Genesis (host $host at $(< $host/.init.stamp))"
+		git init
+		local stamp=$(date '+%F %T %z' | tee "$host/.init.stamp")
+		echo '.*.swp' > .gitignore
+		echo '# SysEdit Git Backend Directory #' > README.md
+		echo "## Created at '$host' on $stamp ##" >> README.md
+		git add .gitignore README.md "$host/.init.stamp"
+		git commit -am "Genesis (host $host at $stamp)"
 	popd >/dev/null
 }
 
 se_log() {
 	pushd "$_se__data_d/." >/dev/null
-	{ cat README.md; git log; } | less
+	{ cat README.md; git log --color; } | less -R
 	popd >/dev/null
 }
 
@@ -82,13 +82,14 @@ _se_add() {
 	[ -e "$dfn" ] && return
 	local ddn="$(dirname "$dfn")"
 	[ -d "$ddn/." ] || mkdir -p "$ddn/."
+
 	pushd "$_se__data_d" >/dev/null
-	local r=$(git remote | wc -l)
-	(( r > 0 )) && git pull -r
-	cp "$ffn" "$dfn"
-	git add "$host$ffn"
-	git commit -m "add '$host$ffn'"
-	(( r > 0 )) && git push
+		local r=$(git remote | wc -l)
+		(( r > 0 )) && git pull -r
+			cp "$ffn" "$dfn"
+			git add "$host$ffn"
+			git commit -m "add '$host$ffn'"
+		(( r > 0 )) && git push
 	popd >/dev/null
 }
 
@@ -110,11 +111,11 @@ _se_update() {
 	cmp -s "$ffn" "$dfn" && { echo "Unchanged '$ffn'.">&2; return; }
 
 	pushd "$_se__data_d" >/dev/null
-	local r=$(git remote | wc -l)
-	(( r > 0 )) && git pull -r
-	cp "$ffn" "$dfn"
-	git commit -m "update '$host$ffn'" "$host$ffn"
-	(( r > 0 )) && git push
+		local r=$(git remote | wc -l)
+		(( r > 0 )) && git pull -r
+			cp "$ffn" "$dfn"
+			git commit -m "update '$host$ffn'" "$host$ffn"
+		(( r > 0 )) && git push
 	popd >/dev/null
 }
 
