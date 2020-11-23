@@ -45,7 +45,7 @@ se_list_config() {
 }
 
 CONFIG_D="$HOME/.config/sysedit.d"
-[ -d "$CONFIG_D/." ] || mkdir -p "$CONFIG_D"
+[ -d "$CONFIG_D/." ] || { mkdir -p "$CONFIG_D" && chmod g+s,o= "$CONFIG_D"; }
 
 CONFIG="$HOME/.config/sysedit.conf"
 [ -e "$CONFIG" ] || { se_list_config | tee "$CONFIG" >/dev/null; }
@@ -58,7 +58,10 @@ done
 
 se_init() {
 	local host=$(hostname -f)
+	local has_dir=yes
+	[ -d "$_se__data_d/." ] || has_dir=no
 	mkdir -p "$_se__data_d/$host/."
+	[ "$has_dir" = no ] && chmod g+s,o= "$_se__data_d/." "$_se__data_d/$host/."
 	pushd "$_se__data_d/." >/dev/null
 		umask 07
 		git init
@@ -83,7 +86,7 @@ _se_add() {
 	local dfn="$_se__data_d/$host$ffn"
 	[ -e "$dfn" ] && return
 	local ddn="$(dirname "$dfn")"
-	[ -d "$ddn/." ] || mkdir -p "$ddn/."
+	[ -d "$ddn/." ] || { mkdir -p "$ddn/." && chmod g+s,o= "$ddn/."; }
 
 	pushd "$_se__data_d" >/dev/null
 		umask 07
