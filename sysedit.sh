@@ -36,6 +36,7 @@ fi >&2
 
 # BEGIN CONFIGURABLE STUFF
 _se__data_d="$HOME/.local/sysedit"
+_se__upstream=''
 # END CONFIGURABLE STUFF
 
 se_list_config() {
@@ -60,18 +61,30 @@ se_init() {
 	local host=$(hostname -f)
 	local has_dir=yes
 	[ -d "$_se__data_d/." ] || has_dir=no
-	mkdir -p "$_se__data_d/$host/."
-	[ "$has_dir" = no ] && chmod g+s,o= "$_se__data_d/." "$_se__data_d/$host/."
-	pushd "$_se__data_d/." >/dev/null
-		umask 07
-		git init
-		local stamp=$(date '+%F %T %z' | tee "$host/.init.stamp")
-		echo '.*.swp' > .gitignore
-		echo '# SysEdit Git Backend Directory #' > README.md
-		echo "## Created at '$host' on $stamp ##" >> README.md
-		git add .gitignore README.md "$host/.init.stamp"
-		git commit -am "Genesis (host $host at $stamp)"
-	popd >/dev/null
+	umask 07
+	if [ -n "$_se__upstream" ]; then
+		git clone "$_se__upstream" "$_se__data_d/." || return $?
+		mkdir -p "$_se__data_d/$host/."
+		chmod g+s,o= "$_se__data_d/." "$_se__data_d/$host/."
+		pushd "$_se__data_d/." >/dev/null
+			local stamp=$(date '+%F %T %z' | tee -a "$host/.init.stamp")
+			echo "## Created by '$USER' at '$host' on $stamp ##" >> README.md
+			git add README.md "$host/.init.stamp"
+			git commit -am "New user $USER@$host, $stamp"
+		popd >/dev/null
+	else
+		mkdir -p "$_se__data_d/$host/."
+		[ "$has_dir" = no ] && chmod g+s,o= "$_se__data_d/." "$_se__data_d/$host/."
+		pushd "$_se__data_d/." >/dev/null
+			git init
+			local stamp=$(date '+%F %T %z' | tee "$host/.init.stamp")
+			echo '.*.swp' > .gitignore
+			echo '# SysEdit Git Backend Directory #' > README.md
+			echo "## Created at '$host' on $stamp ##" >> README.md
+			git add .gitignore README.md "$host/.init.stamp"
+			git commit -am "Genesis (host $host at $stamp)"
+		popd >/dev/null
+	fi
 }
 
 se_log() {
@@ -153,7 +166,7 @@ se_status() {
 
 se_help() {
 	cat <<-EOT
-	$(basename "$exe") [-h|--help] [--config] [-S|--status] [-H|--history] file...
+	$(basename "$exe") [-h|--help] [--clone=URL] [--config] [-S|--status] [-H|--history] file...
 	$(basename "$exe") --git git-command...
 	$(basename "$exe") --git \\!command...
 EOT
@@ -206,6 +219,7 @@ while (( $# > 0 )); do
 		--config)	se_list_config;;
 		--status|-S)	se_status;;
 		--history|-H)	only_history=yes;;
+		--clone=*)	_se__upstream="${arg#*=}";;
 		*)		echo "WTF '$arg'?">&2; let fails+=1;;
 		esac
 	fi
