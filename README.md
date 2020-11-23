@@ -15,4 +15,4 @@ Use `se --git remote add ...` to configure upstreaming.
 
 Per-user config may refer a common repo, `sudo` may be needed to provide "cross-owner" usage.
 
-TODO: Lock the file being edited to avoid multi-user access.
+The file being edited is locked (by `flock(1)`) to avoid multi-user access.

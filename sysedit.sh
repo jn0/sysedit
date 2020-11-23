@@ -16,6 +16,7 @@ declare -a required_packages=(
 	sed		# for sed
 	grep		# for grep
 	diffutils	# for cmp
+	util-linux	# for flock
 )
 
 declare -a install_packages=()
@@ -119,10 +120,15 @@ _se_update() {
 	popd >/dev/null
 }
 
+declare -i _se_FD=100
 se_edit() {
 	local fn="$(realpath -e "$1")"
 
 	[ -w "$fn" ] || { echo "Cannot write to '$fn'.">&2; return 1; }
+
+	eval "exec $_se_FD<'$fn'"
+	flock -n $_se_FD || { echo "!! Locked out '$fn' !!">&2; return 2; }
+	let _se_FD+=1
 
 	_se_add "$fn"
 	_se_edit "$fn"
