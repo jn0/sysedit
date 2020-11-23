@@ -71,7 +71,7 @@ se_init() {
 
 se_log() {
 	pushd "$_se__data_d/." >/dev/null
-	{ cat README.md; git log --color; } | less -R
+	{ cat README.md; git log --dense --color; } | less -R
 	popd >/dev/null
 }
 
