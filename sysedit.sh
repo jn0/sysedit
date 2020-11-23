@@ -60,6 +60,7 @@ se_init() {
 	local host=$(hostname -f)
 	mkdir -p "$_se__data_d/$host/."
 	pushd "$_se__data_d/." >/dev/null
+		umask 07
 		git init
 		local stamp=$(date '+%F %T %z' | tee "$host/.init.stamp")
 		echo '.*.swp' > .gitignore
@@ -85,6 +86,7 @@ _se_add() {
 	[ -d "$ddn/." ] || mkdir -p "$ddn/."
 
 	pushd "$_se__data_d" >/dev/null
+		umask 07
 		local r=$(git remote | wc -l)
 		(( r > 0 )) && git pull -r
 			cp "$ffn" "$dfn"
@@ -112,6 +114,7 @@ _se_update() {
 	cmp -s "$ffn" "$dfn" && { echo "Unchanged '$ffn'.">&2; return; }
 
 	pushd "$_se__data_d" >/dev/null
+		umask 07
 		local r=$(git remote | wc -l)
 		(( r > 0 )) && git pull -r
 			cp "$ffn" "$dfn"
@@ -165,6 +168,7 @@ se_history() {
 se_git() {
 	local -i rc=0
 	pushd "$_se__data_d" >/dev/null
+	umask 07
 	if [ "${1:0:1}" = '!' ]; then
 		local cmd="$1"
 		shift
