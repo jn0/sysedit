@@ -1,2 +1,2 @@
 # sysedit
-System Editor
+System Editor with GIT backend

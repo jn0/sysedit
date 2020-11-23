@@ -1,321 +1,206 @@
 #!/bin/bash
 
-exe="$0"
+exe=$(realpath -e "$0")
 
-DEFAULT_EDITOR=vi
-CONFIG=~/.sysedit.conf
-THE_REPO=~/.se
-FS=$(hostname -s)
+on_err() {
+	echo SCRIPT ERROR
+} >/dev/tty
+trap on_err ERR
+set -e
 
-create=no
-remove=no
+declare -a required_packages=(
+	dpkg		# for dpkg, he-he.
+	coreutils	# for date, touch, etc...
+	mime-support	# for edit
+	git		# for git
+	sed		# for sed
+	grep		# for grep
+	diffutils	# for cmp
+)
 
-say() {
-	echo "$@" >&2
-}
-
-error() {
-	local -i rc=$1
-	shift
-	say "$*"
-	exit $rc
-}
-
-################################################################################
-
-if [ -f "$CONFIG" ] && [ -r "$CONFIG" ]; then
-	repo=$(grep '^[ \t]*repo=' "$CONFIG") || error $? "No 'repo=' in '$CONFIG'."
-	repo=$(eval echo -n $(echo -n $repo | cut -d= -f2-))
-	[ -d "$repo/." ] || error $? "No directory '$repo'."
-	[ -f "$repo/.git/config" ] || error $? "Not a GIT repo '$repo'."
-	THE_REPO="$repo"
-	unset repo
-fi
-
-################################################################################
-
-has_executable() {
-	local cmd="$1"
-	local bin="$(type -p "$cmd")"
-	if [ -e "$bin" ] && [ -x "$bin" ]; then true; else false; fi
-}
-
-env_bin() {
-	local value="$1"
-	if [ -n "$value" ]; then has_executable "$value"; else false; fi
-}
-
-run_if_env_bin() {
-	local cmd="$1"
-	local fn sudo
-	shift
-	for fn; do [ -w "$fn" ] || sudo=sudo; done
-	env_bin "$cmd" && $sudo "$cmd" "$@" || false
-}
-
-edit() {
-	local fn sudo
-	for fn; do [ -w "$fn" ] || sudo=sudo; done
-	run_if_env_bin "$VISUAL" "$@" ||
-	run_if_env_bin "$EDITOR" "$@" ||
-	run_if_env_bin "$GIT_EDITOR" "$@" ||
-	$sudo "$DEFAULT_EDITOR" "$@"
-}
-
-create_file() {
-	local fn="$1"
-	local dn=$(dirname "$fn")
-	local sudo=''
-	[ -d "$dn/." ] || {
-		mkdir -pv "$dn" || {
-			sudo=sudo; sudo mkdir -pv "$dn" ||
-				error $? "Cannot create '$dn/'"
-		}
-	}
-	[ -z "$sudo" -a ! -w "$dn/." ] && sudo=sudo
-	$sudo touch "$fn"
-}
-
-empty_dir() {
-	local dn="$1"
-	[ -d "$dn/." ] || return 0
-	pushd "$dn" || error $? "Cannot pushd '$dn'."
-	local files="$(echo -n *)"
-	popd
-	[ "$files" = '*' ] && true || false
-}
-
-try_remove() {
-	local f="$1"
-	local d="$(dirname "$f")"
-	[ -w "$d/." ] || return 1
-	rm -f "$f" # >/dev/null 2>&1
-	return $?
-}
-
-################################################################################
-
-init_repo() {
-	if [ -d "$THE_REPO/.git/." ]; then
-		:
+declare -a install_packages=()
+for p in "${required_packages[@]}"; do
+	if dpkg -l "$p" >/dev/null 2>&1; then
+		: ok
 	else
-		mkdir -pv "$THE_REPO/"
-		(cd "$THE_REPO" &&
-			touch README &&
-			git init &&
-			git add README &&
-			mkdir -pv "$FS/" && touch "$FS/.init" && git add "$FS/.init" &&
-			git commit -m genesis &&
-			git checkout -b $FS &&
-			mkdir -pv "$FS/" && LANG=C date > "$FS/.init" && git add "$FS/.init" &&
-			git commit -m "genesis of $FS" &&
-		:)
+		install_packages+=( "$p" )
 	fi
+done
+if (( ${#install_packages[@]} > 0 )); then
+	echo 'Please, run the'
+	echo $'\t'"sudo apt install ${install_packages[*]}"
+	echo 'command first!'
+	exit 1
+fi >&2
+
+# BEGIN CONFIGURABLE STUFF
+_se__data_d="$HOME/.local/sysedit"
+# END CONFIGURABLE STUFF
+
+se_list_config() {
+	echo '# SYSEDIT CONFIG BEGIN #'
+	declare -p ${!_se__*} | cut -d' ' -f3- | cut -d_ -f4-
+	echo '# SYSEDIT CONFIG END #'
 }
 
-repo_local() {
-	local f="$1"
-	echo -n "$FS/${f:1}"
+CONFIG_D="$HOME/.config/sysedit.d"
+[ -d "$CONFIG_D/." ] || mkdir -p "$CONFIG_D"
+
+CONFIG="$HOME/.config/sysedit.conf"
+[ -e "$CONFIG" ] || { se_list_config | tee "$CONFIG" >/dev/null; }
+
+for f in "$CONFIG" "$CONFIG_D"/*; do
+	if [ -s "$f" -a -r "$f" ]; then
+		eval $(sed -e 's/#.*$//' -e 's/^\s*//' -e 's/^/_se__/' - < "$f" | grep -v '^_se__$' | tr '\n' ';')
+	fi
+done
+
+se_init() {
+	local host=$(hostname -f)
+	mkdir -p "$_se__data_d/$host/."
+	pushd "$_se__data_d/." >/dev/null
+	git init
+	date '+%F %T %z' > "$host/.init.stamp"
+	echo '.*.swp' > .gitignore
+	echo '# SysEdit Git Backend Directory #' > README.md
+	echo "## Created at '$host' on $(< $host/.init.stamp) ##" >> README.md
+	git add .gitignore README.md "$host/.init.stamp"
+	git commit -am "Genesis (host $host at $(< $host/.init.stamp))"
+	popd >/dev/null
 }
 
-repo_file() {
-	echo -n "$THE_REPO/$(repo_local "$1")"
+se_log() {
+	pushd "$_se__data_d/." >/dev/null
+	{ cat README.md; git log; } | less
+	popd >/dev/null
 }
 
-repo_is_remote() {
-	grep -sq '\[remote ' "$THE_REPO/.git/config"
+_se_add() {
+	local ffn="$1"
+	local host=$(hostname -f)
+	local dfn="$_se__data_d/$host$ffn"
+	[ -e "$dfn" ] && return
+	local ddn="$(dirname "$dfn")"
+	[ -d "$ddn/." ] || mkdir -p "$ddn/."
+	pushd "$_se__data_d" >/dev/null
+	local r=$(git remote | wc -l)
+	(( r > 0 )) && git pull -r
+	cp "$ffn" "$dfn"
+	git add "$host$ffn"
+	git commit -m "add '$host$ffn'"
+	(( r > 0 )) && git push
+	popd >/dev/null
 }
 
-update_remote() {
-	repo_is_remote && git push # origin "$FS"
+_se_edit() {
+	local fn="$1"
+	local -i rc=0
+	edit --norun "$fn" >/dev/null 2>&1 || rc=$?
+	(( $rc == 0 )) && { edit "$fn"; return; }
+	(( $rc == 3 )) && { edit "text/plain:$fn"; return; }
+	echo "Cannot edit '$fn': $rc">&2
+	return $rc
 }
 
-file_is_tracked() {
-	test -f "$(repo_file "$1")"
+_se_update() {
+	local ffn="$1"
+	local host=$(hostname -f)
+	local dfn="$_se__data_d/$host$ffn"
+
+	cmp -s "$ffn" "$dfn" && { echo "Unchanged '$ffn'.">&2; return; }
+
+	pushd "$_se__data_d" >/dev/null
+	local r=$(git remote | wc -l)
+	(( r > 0 )) && git pull -r
+	cp "$ffn" "$dfn"
+	git commit -m "update '$host$ffn'" "$host$ffn"
+	(( r > 0 )) && git push
+	popd >/dev/null
 }
 
-track_file() {
-	local f="$1"
-	local r="$(repo_file "$f")"
-	local d="$(dirname "$f")"; d="${d:1}"
+se_edit() {
+	local fn="$(realpath -e "$1")"
 
-	mkdir -pv "$THE_REPO/$FS/$d"
-	cp -v "$f" "$r" || error $? "Cannot copy '$f' to '$r'."
+	[ -w "$fn" ] || { echo "Cannot write to '$fn'.">&2; return 1; }
 
-	local a="$(cd $THE_REPO && realpath --relative-to="$FS" "$r")"
-	(cd "$THE_REPO/$FS" && git checkout "$FS") || error $? "git checkout '$FS' error"
-	(cd "$THE_REPO/$FS" && git add "$a") || error $? "git add '$a' error"
-	(cd "$THE_REPO/$FS" && git commit -am "add $a") || error $? "git commit '$a' error"
-	update_remote
+	_se_add "$fn"
+	_se_edit "$fn"
+	_se_update "$fn"
 }
 
-clear_dirs() {
-	local dn="$1" stop="$THE_REPO/$FS" xn=''
-	[ "${dn:0:${#stop}}" = "$stop" ] || error 1 "Cannot clear '$dn' (not in '$stop')."
-	while [ -n "$dn" ] && [ "$dn" != "$stop" ]; do
-		if empty_dir "$dn"; then
-			[ -d "$dn/." ] && rmdir "$dn"
-			[ -e "$dn" ] && error 1 "Cannot remove '$dn'."
-			dn="$(dirname "$dn")"
-		else
-			break
-		fi
-	done
+se_status() {
+	local host=$(hostname -f)
+	pushd "$_se__data_d" >/dev/null
+	git status --short
+		pushd "$host" >/dev/null
+		ls -lAR
+		popd >/dev/null
+	popd >/dev/null
 }
 
-untrack_file() {
-	local f="$1"
-	local l="$(repo_local "$f")"
-	local d="$(dirname "$f")"; d="${d:1}"
-
-	test -d "$THE_REPO/$FS/$d/." || return
-	(cd "$THE_REPO" && { git rm "$l" || error $? "Cannot git rm '$l'."; })
-	clear_dirs "$(dirname `repo_file "$f"`)"
-
-	(cd "$THE_REPO/$FS" && git commit -am "remove $l") ||
-		error $? "git commit 'remove $l' error"
-	update_remote
-}
-
-file_is_changed() {
-	local f="$1"
-	local r="$(repo_file "$f")"
-	if cmp -s "$f" "$r"; then say "intact"; false; else say "changed"; true; fi
-}
-
-update_file() {
-	local f="$1"
-	local r="$(repo_file "$f")"
-	cp -v "$f" "$r" || error $? "Cannot copy '$f' to '$r'."
-	local a="$(cd $THE_REPO && realpath --relative-to="$FS" "$r")"
-	(cd "$THE_REPO/$FS" && git add "$a") || error $? "git add '$a' error"
-}
-
-commit_changes() {
-	local -a files=( "$@" )
-	for ((i=0; i<${#files[@]}; i++)); do
-		files[$i]=$(repo_local ${files[$i]})
-	done
-	(cd "$THE_REPO/$FS" && git commit -am "changed ${files[*]}") ||
-		error $? "git commit '${files[*]}' error"
-}
-
-set_remote() {
-	local arg="$1" # --remote=<URL>
-	case "$arg" in
-	--remote=*)	arg="${arg:9}";;
-	*)		error 1 "Wrong format '$arg'";;
-	esac
-	pushd "$THE_REPO" || error $? "Cannot chdir($THE_REPO)."
-set -x
-	git remote add origin "$arg"
-	git checkout "$FS"
-	git fetch
-	git branch --set-upstream-to=origin/"$FS" "$FS"
-	git pull -r origin "$FS"
-
-	while [ -n "$(git status --porcelain)" ]; do
-		git rebase --skip
-	done
-
-	LANG=C date > "$FS/.init"
-	git commit -m "update '$FS/.init'" "$FS/.init"
-
-	# git push --set-upstream origin "$FS"
-	# git push origin "$FS"
-	git push # origin "$FS"
-set +x
-	popd
-}
-
-################################################################################
-
-do_help() {
-cat <<-EOT
-	$(basename $exe) --list | --ls	# show some info about backend
-	$(basename $exe) --remote=<GIT-URL>	# setup backend to track upstream
-	$(basename $exe) <filespec> ...	# work with files
-
-	<filespec> ::= [ <option> ] <filename> ...
-	<option> ::= '--create' | '--remove' | '--rm'
-	<filename> ::= mere local file name
-
-	ALL filenames after --create will be created.
-	ALL filenames after --remove will be removed.
-
-	It's quite possible to enable BOTH options to
-	do some tricks...
+se_help() {
+	cat <<-EOT
+	$(basename "$exe") [-h|--help] [--config] [-S|--status] [-H|--history] file...
+	$(basename "$exe") --git git-command...
+	$(basename "$exe") --git \\!command...
 EOT
-	exit 0
 }
 
-do_list() {
-	pushd "$THE_REPO" && git status && git log --oneline -n10 && ls -ltraF && popd
-	exit $?
+se_history() {
+	local fn="$(realpath -e "$1")"
+	local host=$(hostname -f)
+
+	pushd "$_se__data_d" >/dev/null
+	git log -- "$host$fn"
+	popd >/dev/null
 }
 
-################################################################################
+se_git() {
+	local -i rc=0
+	pushd "$_se__data_d" >/dev/null
+	if [ "${1:0:1}" = '!' ]; then
+		local cmd="$1"
+		shift
+		cmd="${cmd:1}"
+		"$cmd" "$@"
+	else
+		git "$@"
+	fi; rc=$?
+	popd >/dev/null
+	return $rc
+}
 
-init_repo
+[ -d "$_se__data_d/." ] || se_init
 
-declare -a args=( "$@" )
-declare -a files=()
-declare -a flags=()
+(( $# == 0 )) && { se_log; exit; }
 
-declare -i j=0
-declare -i k=0
-for ((i=0; i<${#args[@]}; i++)); do
-	a="${args[$i]}"
-	f="$(realpath -qe -- "$a")"
-	if [ -z "$f" ]; then # no file!
-		if [ "${a:0:1}" = '-' ]; then
-			flags[$k]="$a"
-			let k+=1
-			case "$a" in
-			--help|-h)	do_help;;
-			--list|--ls)	do_list;;
-			--create)	create=yes;;
-			--remove|--rm)	remove=yes;;
-			--remote=*)	set_remote "$a";;
-			*)		error 1 "Unknow flag '$a'.";;
-			esac
-			continue
-		fi
-		[ "$create" != 'yes' ] &&
-			error 1 "There is no file '$a'. Use '--create $a' if needed."
-		create_file "$(realpath -qm -- "$a")"
-		f="$(realpath -qe -- "$a")"
-		[ -z "$f" ] && error 1 "Cannot create '$f' for '$a'."
+declare -i fails=0
+only_history=no
+git_mode=no
+while (( $# > 0 )); do
+	arg="$1"; shift
+	if [ -e "$arg" ]; then
+		if [ "$only_history" = yes ]; then
+			se_history "$arg"
+		else
+			se_edit "$arg"
+		fi || let fails+=1
+	else
+		case "$arg" in
+		-h|--help)	se_help; exit 0;;
+		--git)		git_mode=yes;;
+		--config)	se_list_config;;
+		--status|-S)	se_status;;
+		--history|-H)	only_history=yes;;
+		*)		echo "WTF '$arg'?">&2; let fails+=1;;
+		esac
 	fi
-	if [ "$remove" = 'yes' ]; then
-		try_remove "$f" || { sudo rm -iv "$f" || error $? "Cannot remove '$f'."; }
-		file_is_tracked "$f" && untrack_file "$f"
-		continue
+	if [ "$git_mode" = yes ]; then
+		se_git "$@" || let fails+=1
+		break
 	fi
-	files[$j]="$f"
-	let j+=1
-	unset -v a f d
 done
-unset -v i j k
 
-(( ${#files[@]} == 0 )) && { cd $THE_REPO && git log --oneline -n 40; exit; }
-
-for f in "${files[@]}"; do
-	file_is_tracked "$f" || track_file "$f"
-done
-unset f
-
-edit "${files[@]}"
-typeset -i changed=0
-declare -a updated=()
-
-for ((i=0; i<${#files[@]}; i++)); do
-	f="${files[$i]}"
-	file_is_changed "$f" && { updated[$changed]="$f"; let changed+=1; update_file "$f"; }
-	unset f
-done
-if (( changed > 0 )); then
-	commit_changes "${updated[@]}" && update_remote
-fi
+exit $fails
 
 # EOF #
