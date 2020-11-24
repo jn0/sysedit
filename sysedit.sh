@@ -17,6 +17,7 @@ declare -a required_packages=(
 	grep		# for grep
 	diffutils	# for cmp
 	util-linux	# for flock
+	psmisc		# for fuser
 )
 
 declare -a install_packages=()
@@ -146,7 +147,7 @@ se_edit() {
 	[ -w "$fn" ] || { echo "Cannot write to '$fn'.">&2; return 1; }
 
 	eval "exec $_se_FD<'$fn'"
-	flock -n $_se_FD || { echo "!! Locked out '$fn' !!">&2; return 2; }
+	flock -n $_se_FD || { echo "!! Locked out '$fn' !!">&2; fuser -v "$fn"; return 2; }
 	let _se_FD+=1
 
 	_se_add "$fn"
