@@ -3,48 +3,23 @@
 exe=$(realpath -e "$0")
 CONFIG="$HOME/.config/pupdate.d"
 
-declare -a required_packages=(
-	dpkg		# for dpkg, he-he.
-	coreutils	# for date, touch, etc...
-	mime-support	# for edit
-	sed		# for sed
-	grep		# for grep
-	util-linux	# for flock
-	openssh-client	# for ssh/scp
-)
-
-declare -a install_packages=()
-for p in "${required_packages[@]}"; do
-	if dpkg -l "$p" >/dev/null 2>&1; then
-		: ok
-	else
-		install_packages+=( "$p" )
-	fi
-done
-if (( ${#install_packages[@]} > 0 )); then
-	echo 'Please, run the'
-	echo $'\t'"sudo apt install ${install_packages[*]}"
-	echo 'command first!'
-	exit 1
-fi >&2
-
 [ -d "$CONFIG/." ] || mkdir -p "$CONFIG"
 
-tmpd=$(mktemp -d)
+tmpd=$(mktemp -td pupdate.XXXXXXXXXX.logs)
 cleanup() {
 	rm -rf "$tmpd"
 }
 trap cleanup EXIT
 
 on_error() {
-	echo "ERROR IN '${BASH_SOURCE}' +${BASH_LINENO} @${FUNCNAME[1]}"
+	echo "ERROR IN ${BASH_SOURCE@Q} +${BASH_LINENO} @${FUNCNAME[1]}"
 	sed -ne "${BASH_LINENO}p" < "${BASH_SOURCE}"
 } >/dev/tty
 trap on_error ERR
 
 do_help() {
 	cat <<EOT
-	$(basename $exe .sh) [[command] [config...]]
+	$(basename $exe .sh) [command [config...]]
 	Commands:
 		-h|--help			-- this help
 		-l|-ls|--ls|--list [cf ...]	-- list configs (default for no config specified)
@@ -54,6 +29,9 @@ do_help() {
 		-D|-rm|--remove|--delete cf ...	-- remove configs
 		--copy|-cp cf1 cf2		-- copy <cf1> to <cf2>
 		--move|-mv|--rename cf1 cf2	-- rename <cf1> to <cf2>
+		--clone-to <host>...		-- clone pupdate and config to <host>s
+						   if <host> looks like '@<name>', then <name> is a config name
+						   and its 'hosts=' entry will be used to expand the <host>
 		-R|-run|--run cf		-- run config (default for config specified)
 EOT
 	exit 0
@@ -65,9 +43,9 @@ do_list() {
 
 	for a; do
 		f="$CONFIG/$a"
-		[ -f "$f" ] || { echo "No '$a'.">&2; continue; }
+		[ -f "$f" ] || { echo "No ${a@Q}.">&2; continue; }
 		t=$(grep '^title=' "$f" | cut -d= -f2-)
-		echo -n "$a ($f)"
+		echo -n "$a" # ($f)"
 		[ -n "$t" ] && echo $'\t'"- $t" || echo
 	done
 	exit
@@ -77,7 +55,7 @@ do_view() {
 	local a f
 	for a; do
 		f="$CONFIG/$a"
-		[ -f "$f" ] || { echo "No '$a'.">&2; continue; }
+		[ -f "$f" ] || { echo "No ${a@Q}.">&2; continue; }
 		echo "### $a ($f)"
 		cat -n "$f"
 	done
@@ -88,7 +66,7 @@ do_create() {
 	local a f
 	for a; do
 		f="$CONFIG/$a"
-		[ -f "$f" ] && { echo "The '$a' already exists.">&2; continue; }
+		[ -f "$f" ] && { echo "The ${a@Q} already exists.">&2; continue; }
 		echo "### $a ($f)"
 		cat >> "$f" <<-EOT
 			title='$a farm update'
@@ -107,36 +85,26 @@ do_remove() {
 	local a f
 	for a; do
 		f="$CONFIG/$a"
-		[ -f "$f" ] || { echo "No '$a'.">&2; continue; }
+		[ -f "$f" ] || { echo "No ${a@Q}.">&2; continue; }
 		echo "### $a ($f)"
 		rm -vi "$f"
 	done
 	exit
 }
 
-_edit() {
-	local fn="$1"
-	local -i rc=0
-	edit --norun "$fn" >/dev/null 2>&1 || rc=$?
-	(( $rc == 0 )) && { edit "$fn"; return; }
-	(( $rc == 3 )) && { edit "text/plain:$fn"; return; }
-	echo "Cannot edit '$fn': $rc">&2
-	return $rc
-}
-
 do_edit() {
 	local a f
 	for a; do
 		f="$CONFIG/$a"
-		[ -f "$f" ] || { echo "No '$a'.">&2; continue; }
+		[ -f "$f" ] || { echo "No ${a@Q}.">&2; continue; }
 		echo "### $a ($f)"
-		_edit "$f"
+		edit "$f"
 	done
 	exit
 }
 
 pager_if_term() {
-	[ -t 1 ] && less || tee -ai /dev/null
+	[ -t 1 ] && less -R -F || tee -ai /dev/null
 }
 
 copy_files() {
@@ -152,21 +120,27 @@ copy_files() {
 	done
 	echo "Copying ${files[@]} ..."
 	for a in "${hosts[@]}"; do
-		echo \# scp "${files[@]}" "$a:" > "$tmpd/$a.scp.log"
-		scp "${files[@]}" "$a:" >> "$tmpd/$a.scp.log" 2>&1 &
+		{ echo "# $(date '+%F %T %z')"; echo "# scp ${files[*]} $a:"; } > "$tmpd/$a.scp.log"
+		{ scp -p "${files[@]}" "$a:"; local rx=$?; echo; echo "# RC=$rx @ $(date '+%F %T %z') #"; return $rx; } >> "$tmpd/$a.scp.log" 2>&1 &
 		pids+=( $! )
 		echo "[${pids[-1]}] $a - copying..." >&2
 	done
 	wait "${pids[@]}"; rc=$? # ; echo "!! $rc !!"
+
 	if (( rc == 0 )); then
-		echo 'Everything ok!'
-	else
-		for a in "${hosts[@]}"; do
-			[ "$a" = "${hosts[0]}" ] && echo "Something went wrong! ($rc)"
-			ls -l "$tmpd/$a.scp.log"
-			cat "$tmpd/$a.scp.log"
-		done | pager_if_term
+		echo 'Everything were copied ok.'
+		# for a in "${hosts[@]}"; do cat -An "$tmpd/$a.scp.log"; done | pager_if_term
+		return 0
 	fi
+
+	echo "Something went wrong! ($rc)" >&2
+	for a in "${hosts[@]}"; do
+		echo '##################################################'
+		ls -l "$tmpd/$a.scp.log" | sed -e 's/^/# /' -
+		cat "$tmpd/$a.scp.log"
+		echo '##################################################'
+	done | pager_if_term
+	return 1
 }
 
 run_command() {
@@ -176,22 +150,22 @@ run_command() {
 	local -i rc=999
 	echo "Running \`$cmd\`..."
 	for host; do
-		{ echo "# $(date '+%F %T %z')"; echo "# ssh $host $cmd"; } > "$tmpd/$host.ssh.log"
+		{ echo "# $(date '+%F %T %z')"; echo "# ssh $host \"$cmd\""; } > "$tmpd/$host.ssh.log"
 		{ ssh "$host" "$cmd"; local rx=$?; echo; echo "# RC=$rx @ $(date '+%F %T %z') #"; return $rx; } >> "$tmpd/$host.ssh.log" 2>&1 &
 		pids+=( $! )
 		echo "[${pids[-1]}] $host - starting..." >&2
 	done
 	wait "${pids[@]}"; rc=$? # ; echo "!! $rc !!"
 	if (( rc == 0 )); then
-		echo 'Everything ok!'
+		echo 'All commands returned zero.'
 	else
-		echo '! Problems...' >&2
+		echo "Something went wrong! ($rc)" >&2
 		for host; do
-			[ "$host" = "$1" ] && echo "Something went wrong! ($rc)"
 			echo '##################################################'
 			echo "### HOST: $host"
 			ls -l "$tmpd/$host.ssh.log" | sed -e 's/^/### /' -
 			cat "$tmpd/$host.ssh.log"
+			echo '##################################################'
 		done | pager_if_term
 		return 1
 	fi
@@ -201,17 +175,22 @@ validate_output() {
 	local term="$1" host fn
 	[ -z "$term" ] && return 0
 	local -i rc=0
+	local -a failed=()
 	shift
 	for host; do
 		fn="$tmpd/$host.ssh.log"
 		grep -q "$term" "$fn" && continue
-		echo "! No '$term' in '$fn' !">&2
+		echo "! No ${term@Q} in ${fn@Q} !">&2
 		let rc+=1
+		failed+=( $host )
 		{ echo '##################################################'
-		  echo "# LOOKUP FOR '$term' FAILED FOR HOST: $host"
+		  echo "# LOOKUP FOR ${term@Q} FAILED FOR HOST: $host"
 		  cat "$tmpd/$host.ssh.log"
+		  echo '##################################################'
 		} | pager_if_term
 	done
+	local m; IFS='|' m="${failed[*]}"; m="${m//|/\', \'}"
+	(( rc > 0 )) && echo "! The log checkup failed for ${term@Q} at '${m}' !">&2
 	return $rc
 }
 
@@ -221,7 +200,7 @@ run_it() {
 	eval $(sed -e 's/#.*$//' -e 's/^/local PUPDATE_/' < "$f" | tr '\n' ';')
 	declare -p ${!PUPDATE_*} | sed -e 's/^[^_]\+_/# /' - >&2
 	[ -n "$PUPDATE_title" ] && echo "[$PUPDATE_title]" || echo "[[$(basename "$f")]]"
-	[ -n "$PUPDATE_cwd" ] && { cd "$PUPDATE_cwd" || { echo "Cannot cd '$PUPDATE_cwd' ($?)"; return 1; }; }
+	[ -n "$PUPDATE_cwd" ] && { cd "$PUPDATE_cwd" || { echo "Cannot cd ${PUPDATE_cwd@Q} ($?)"; return 1; }; }
 	[ -z "$PUPDATE_hosts" ] && { echo "No hosts">&2; return 1; }
 	[ -n "$PUPDATE_files" ] && { time copy_files "${PUPDATE_files[@]}" -- "${PUPDATE_hosts[@]}" || return $?; }
 	[ -n "$PUPDATE_command" ] && { time run_command "${PUPDATE_command}" "${PUPDATE_hosts[@]}" || rc=$?; }
@@ -237,10 +216,10 @@ do_run() {
 	declare -p ${!SSH_*} | sed -e 's/^[^_]\+_/# /' - >&2
 	for a; do
 		f="$CONFIG/$a"
-		[ -f "$f" ] || { echo "No '$a'.">&2; continue; }
+		[ -f "$f" ] || { echo "No ${a@Q}.">&2; continue; }
 		echo "### $a"
 
-		eval "exec $fd<'$f'"
+		eval "exec $fd<${f@Q}"
 		flock -n $fd || { echo "!! Locked out !!">&2; continue; }
 
 		run_it "$f"; let rc+=$?
@@ -269,6 +248,34 @@ do_move() {
 	exit
 }
 
+do_clone_to() {
+	local host
+	for host; do
+		echo "<$host>"
+		if [ "${host:0:1}" = '@' ]; then
+			local name="${host:1}"
+			local file="$CONFIG/$name"
+			[ -r "$file" ] || { echo "No file for ${host@Q}!">&2; return 1; }
+			unset ${!PUPDATE_*}
+			eval $(sed -e 's/#.*$//' -e 's/^/local PUPDATE_/' < "$file" | tr '\n' ';')
+			declare -p ${!PUPDATE_*} | sed -e 's/^[^_]\+_/# /' - >&2
+			[ -n "$PUPDATE_title" ] && echo "[$PUPDATE_title]" || echo "[[$name]]"
+			[ -n "$PUPDATE_cwd" ] && { cd "$PUPDATE_cwd" || { echo "Cannot cd ${PUPDATE_cwd@Q} ($?)"; return 1; }; }
+			[ -z "$PUPDATE_hosts" ] && { echo "No hosts">&2; return 1; }
+			[ -n "$PUPDATE_files" ] || :
+			[ -n "$PUPDATE_command" ] || :
+			[ -n "$PUPDATE_lookup" ] || :
+			do_clone_to "${PUPDATE_hosts[@]}" || return $?
+			continue
+		fi
+		ssh "$host" "mkdir -p ~/.local/bin ~/.config/pupdate.d" || { echo "No way to setup ${host@Q}!">&2; return 1; }
+		scp -p "$exe" "$host":.local/bin/ || { echo "Cannot copy binary to ${host@Q}!">&2; return 1; }
+		pushd "$CONFIG" >/dev/null
+			scp -p * "$host":.config/pupdate.d/ || { echo "Cannot copy configs to ${host@Q}!">&2; return 1; }
+		popd >/dev/null
+	done
+}
+
 (( $# == 0 )) && { do_list; exit; }
 
 while (( $# > 0 )); do
@@ -284,8 +291,8 @@ while (( $# > 0 )); do
 	--copy|-cp)		do_copy "$@";;
 	--rename|--move|-mv)	do_move "$@";;
 	-R|-run|--run)		do_run "$@";;
-	-*)			echo "WTF '$a'?">&2; exit 1;;
-	*)			do_run "$a" "$@";;
+	--clone-to)		do_clone_to "$@" || exit $?; exit;;
+	*)			echo "WTF ${a@Q}?">&2; exit 1;;
 	esac
 done
 
